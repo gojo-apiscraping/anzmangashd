@@ -5,9 +5,8 @@ const cheerio = require('cheerio');
 const axios = require('axios');
 
 /* Route get images by chapters. */
-router.get('/manga/:name/:chapter', function(req, res, next) {
+router.post('/manga/:name/:chapter', function(req, res, next) {
   const {chapter, name } = req.params;
-
   getImages(name, chapter)
     .then((resImage) => {
       res.json(resImage);
@@ -28,8 +27,8 @@ router.get('/manga/:name/:chapter', function(req, res, next) {
 });
 
 /* Route get chapters by Manga. */
-router.get('/manga/:name', function(req, res) {
-    const {name } = req.params;
+router.post('/manga/:name', function(req, res) {
+    const {name} = req.params;
     getChapters(name)
       .then((data) => {
         res.json(data);
@@ -88,14 +87,24 @@ function getImages(name, chapter) {
 
 function getChapters(name) {
   return new Promise((resolve, reject) => {
-    let url = 'https://www.anzmangashd.com/search';
-    axios.get(url, { params: { query: name } })
+    let urlReq = 'https://www.anzmangashd.com/search';
+    axios.get(urlReq, { params: { query: name } })
       .then(async (response) => {
-        let nameSearch = response.data.suggestions[0].data;
-        let nameDefault = response.data.suggestions[0].value;
+        
+        let nameSearch = [];
+        let nameDefault = [];
+        
+        for (const element of response.data.suggestions) {
+          nameSearch.push(element.data);
+          nameDefault.push(element.value);
+        }
 
-        return getAllChapters(nameSearch, nameDefault)
+        return getAllLinkChapters(nameSearch, nameDefault)
           .then((chapters) => {
+            for (let i = 0; i < nameSearch.length; i++) {
+              if(chapters[i].name === nameSearch[i])
+              console.log(nameDefault[i]);
+            }
             return {
               data: response.data,
               chapters: chapters
@@ -106,16 +115,13 @@ function getChapters(name) {
         let data = result.data;
         let chapters = result.chapters;
         let suggestions = data.suggestions;
-
-        let response = {
-          name: suggestions[0].value,
-          searchName: suggestions[0].data,
-          chapters: chapters
-        };
-
+        let response = [];
+        
+        response.push({suggestions: chapters});
+        
         suggestions[0].chapters = chapters;
 
-        resolve(response);
+        resolve(response[0]);
       })
       .catch((error) => {
         console.error(error);
@@ -124,36 +130,54 @@ function getChapters(name) {
   });
 }
 
-function getAllChapters(nameSearch, nameDefault) {
+function getAllLinkChapters(nameSearch, nameDefault) {
   return new Promise(async (resolve, reject) => {
     let anzmanga = 'www.anzmangashd';
-
-    request(`https://${anzmanga}.com/manga/${nameSearch}`, async (err, res2, body) => {
-      if (!err && res2.statusCode == 200) {
-        let $ = cheerio.load(body);
-        let rawChapters = [];
-        $('li > h5 > a', 'ul.chapters').each(function () {
-          rawChapters.push($(this).text());
-        });
-
-        let chapters = await Promise.all(rawChapters.map(async (chapter) => {
-          let numberChapter = chapter.split(nameDefault)[1].trim();
-          let imageData = await getImages(nameSearch, numberChapter);
-          return {
-            chapter: numberChapter,
-            sheets: imageData.sheets,
-            images: imageData.img,
+    let chapters = [];
+    let search = {
+      lenghtData: nameSearch.length,
+      nameSearch, 
+      nameDefault
+    }
+    async function getImagesByChapter(url, params){
+      return new Promise((resolve, reject) => {
+        request(url, (err, res2, body) => {
+          if (err) {
+            reject(err);
           }
-        }));
+          if (res2.statusCode !== 200) {
+            reject(new Error(`Request failed with status ${res2.statusCode}`));
+          }
 
-        chapters = chapters.reverse();
+          const $ = cheerio.load(body);
+          const rawChapters = [];
+          
+          $('li > h5 > a', 'ul.chapters').each(function () {
+            let cleanUp = ($(this).text()).replace(params.value, "").trim()
+            rawChapters.push(`/api/anz/manga/${params.data}/${cleanUp}`);
+          });
 
-        resolve(chapters);
-      } else {
-        reject(err);
-      }
-    });
-  });
+          resolve(rawChapters);
+        });
+      });
+    }
+    for (let i = 0; i < search.lenghtData; i++) {
+      chapters.push({
+        value: search.nameDefault[i], 
+        data: search.nameSearch[i], 
+        chapters: (
+          await getImagesByChapter(
+            `https://${anzmanga}.com/manga/${search.nameSearch[i]}`, 
+            {
+              value: search.nameDefault[i], 
+              data: search.nameSearch[i]
+            }
+          )
+        )
+      })
+    }
+    resolve(chapters)
+})
 }
 
 
